@@ -128,6 +128,7 @@ if question:
         config=config,
         context=Context(user_id="1")
     )
+    st.write(SYSTEM_PROMPT)
     st.write(response['structured_response'])
     
 
