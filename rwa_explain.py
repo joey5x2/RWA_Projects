@@ -4,6 +4,9 @@ import os
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 
+env = find_dotenv()
+
+
 # %%
 import pandas as pd
 
@@ -69,8 +72,9 @@ def get_user_team(runtime: ToolRuntime[Context]) -> str:
 
 # Configure model
 model = init_chat_model(
-    "anthropic:claude-sonnet-4-5",
-    # "openai:gpt-4o", # "google_genai:gemini-2.0-flash",
+    #"anthropic:claude-sonnet-4-5",
+    "openai:gpt-4o", 
+    # "google_genai:gemini-2.0-flash",
     temperature=0
 )
 
