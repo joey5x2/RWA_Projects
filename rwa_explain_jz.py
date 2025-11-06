@@ -29,7 +29,7 @@ from langchain.chat_models import init_chat_model
 from langchain.tools import tool, ToolRuntime
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.prompts import PromptTemplate
-
+from langchain_community.chat_models import ChatOllama
 
 # # Define system prompt
 SYSTEM_PROMPT = f"""
@@ -93,8 +93,11 @@ model = init_chat_model(
     #"anthropic:claude-sonnet-4-5",
     "openai:gpt-4o", 
     # "google_genai:gemini-2.0-flash",
+    # "ollama:llama3",
     temperature=0
 )
+
+# model = ChatOllama(model="mistral", temperature=0)
 
 # Define response format
 @dataclass
@@ -107,6 +110,10 @@ checkpointer = InMemorySaver()
 
 # Create agent
 st.title("Variance Analysis Tool")
+
+if "history" not in st.session_state:
+    st.session_state.history = []
+
 data_file = st.text_input("Input data file:") 
 # df = pd.read_csv(data_file)
 question = st.text_input("Ask a quesion:")
@@ -122,6 +129,7 @@ agent = create_agent(
 
 # Run agent
 config = {"configurable": {"thread_id": "1"}}
+# question = "did RWA increase or decrease from Jan to Feb? explain why"
 if question:
     response = agent.invoke(
         {"messages": [{"role": "user", "content": question}]},
@@ -129,7 +137,12 @@ if question:
         context=Context(user_id="1")
     )
     st.write(SYSTEM_PROMPT)
-    st.write(response['structured_response'])
+    if response['structured_response'].response:
+        st.session_state.history.append(response['structured_response'].response)
+    for item in st.session_state.history:
+        st.write(item)
+    # st.write(response['structured_response'].response)
+    # print(response['structured_response'].response)
     
 
 
