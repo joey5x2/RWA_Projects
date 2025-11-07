@@ -1,10 +1,14 @@
 import os
 from langchain_openai import ChatOpenAI
+
 from dotenv import load_dotenv
-load_dotenv()  # if using .env
+load_dotenv()  
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-print()
+
+print(OPENAI_API_KEY)
+
+
 import pandas as pd
 
 # DataFrame 1: T-1 data
@@ -22,7 +26,7 @@ df1 = pd.DataFrame({
 # DataFrame 2: T data (with some changes)
 df2 = pd.DataFrame({
 'Netting Set ID': ['101', '101', '102', '103', '104'],
-    'Source Txns ID': ['6', '2', '3', '4', '5'],
+    'Source Txns ID': ['1', '2', '3', '4', '5'],
     'Exposure': [100000001,10020,10300, 14000, 14000],
     'Eligible Collateral': [100,200,300,400, 400],
     'Addon':[99,98,100,136, 136],
