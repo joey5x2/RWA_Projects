@@ -2,20 +2,39 @@
 import os
 import pandas as pd
 import numpy as np
-# %%
-is_number = lambda x: isinstance(x, (int, float, complex))
+
+is_number = lambda x: isinstance(x, (int, float, complex, np.number)) and not pd.isna(x)
 
 class CalcEAD():
 
     def __init__(self, df: pd.DataFrame):
         self.df = df.copy()
 
-        self.df.columns = df.columns.str.lstrip(' ')
-        self.df.columns = df.columns.str.rstrip(' ')
+        self.df.columns = df.columns.str.strip()
+        self.df.replace(["N/A", "NA", "-", "—", "", " "], np.nan, inplace=True)
 
-        for column_name in ['Principal','Market Value']:
-            self.df[column_name] = self.df[column_name].apply(lambda x: 0 if not is_number(x) else x)
-    
+        numeric_cols = ['Principal', 'Market Value', 'Haircut','Scen A MPOR', 'Scen B MPOR']
+        for col in numeric_cols:
+            self.df[col] = (
+                        self.df[col]
+                        .astype(str)
+                        .str.replace(",", "", regex=False)      
+                        .str.replace("$", "", regex=False)      
+                        .str.replace("–", "-", regex=False)
+                        .str.strip()                            
+                    )
+            self.df[col] = pd.to_numeric(self.df[col], errors="coerce").fillna(0.0)
+
+        text_cols = [
+            'Buy or Sell Indicator', 'LRM Flag', 'Dsft Base Conc',
+            'Haircut Eligible Status', 'Stale prc flg 2days',
+            'Illiquid Flag', 'Netting Set ID', 'Security ID',
+            'Exposure Currency', 'Collateral Currency', 'Agr Settlement Ccy code'
+        ]
+        for col in text_cols:
+            if col in self.df.columns:
+                self.df[col] = self.df[col].astype(str).str.strip()
+
         self.df = pd.concat([self.df,self.df.apply(self.calc_txn_components,axis=1)],axis=1)
         self.df_sec_addon = self._compute_sec_addon()
         self.df_fx_addon = self._compute_fx_addon()
@@ -140,3 +159,12 @@ class CalcEAD():
         df_rwa_summary['EAD - Scen B'] = df_rwa_summary.apply(lambda row: max(0,row['Trade Level Exposure']-row['Trade Level Collateral - Scen B']+row['Sec Addon Net Amount - Scen B']+row['FX Addon Net Amount - Scen B']),axis=1)
         df_rwa_summary['EAD'] = df_rwa_summary.apply(lambda row: min(row['EAD - Scen A'],row['EAD - Scen B']),axis=1)
         return df_rwa_summary
+
+# %%
+if __name__ == "__main__":
+    print("Running EAD test...")
+    df_old = pd.read_csv('Data v2_1.csv')
+    df_new = pd.read_csv('Data v2_2.csv')
+    calc_old = CalcEAD(df_old)
+    calc_new = CalcEAD(df_new)
+    print(calc_new.df_rwa_summary)

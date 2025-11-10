@@ -11,8 +11,8 @@ from rwa_calc import CalcEAD
 
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
-from langgraph.checkpoint.memory import InMemorySaver
 from langchain.tools import tool
+from langgraph.checkpoint.memory import InMemorySaver
 
 load_dotenv(find_dotenv())
 
@@ -32,7 +32,8 @@ class ResponseFormat:
 checkpointer = InMemorySaver()
 
 # %%
-def compare_ead(df_old, df_new):
+@st.cache_data
+def compare_ead_cached(df_old, df_new):
     data_old, data_new = CalcEAD(df_old), CalcEAD(df_new)
     summary_old = data_old.df_rwa_summary.reset_index()
     summary_new = data_new.df_rwa_summary.reset_index()
@@ -50,7 +51,8 @@ def compare_ead(df_old, df_new):
         merged[f"{col}_Δ"] = merged.get(f"{col}_new", 0) - merged.get(f"{col}_old", 0)
     return merged
 
-def summarize_inputs(df_old, df_new):
+@st.cache_data
+def summarize_inputs_cached(df_old, df_new):
     drivers = []
     for label, df in [("old", df_old), ("new", df_new)]:
         numeric_cols = df.select_dtypes("number").columns.tolist()
@@ -59,35 +61,44 @@ def summarize_inputs(df_old, df_new):
         drivers.append(desc)
     return pd.concat(drivers)
 
-def ai_agent(code_text,input_data_old,input_data_new,driver_summary,ead_deltas,llm_model):
+def build_tools(df_old, df_new):    
+    @tool
+    def preview_data(dataset: str, n: int = 5) -> str:
+        """Preview the first n rows of the dataset."""
+        df = df_old if dataset.lower() == "old" else df_new
+        return df.head(n).to_string()
 
-    input_data_old_text = input_data_old.to_csv(index=False)
-    input_data_new_text = input_data_new.to_csv(index=False)
+    @tool
+    def query_data(dataset: str, query: str, n: int = 10) -> str:
+        """Run a pandas query (df.query syntax) safely and return top N rows."""
+        df = df_old if dataset.lower() == "old" else df_new
+        try:
+            result = df.query(query).head(n)
+            return result.to_string()
+        except Exception as e:
+            return f"Query failed: {e}"
+
+    return [preview_data, query_data]
+
+def ai_agent(code_text,driver_summary,ead_deltas,llm_model,tools):
 
     SYSTEM_PROMPT = f"""
     You are an expert financial risk analyst.
 
-    You are given:
-    1. The Python code that calculates Exposure at Default (EAD).
-    2. Two sets of input data in full.
-    3. Two sets of input data (old vs new) summarized statistically.
-    4. The calculated EAD summaries for both datasets, and the numeric deltas.
+    You can use the following Python tools to explore real datasets:
+    - preview_data: to inspect sample rows
+    - query_data: to filter data by condition
 
-    Your job:
-    - Explain what likely caused the increase or decrease in EAD.
-    - Identify which input variables (e.g., Market Value, Principal, Haircut, MPOR, Buy/Sell Indicator) changed and how they influenced the result.
-    - Focus on concrete quantitative drivers, not vague explanations.
-    - Use reasoning based on the code logic (how collateral, exposure, and add-ons interact).
+    You are given:
+    - Python code for EAD calculation
+    - Summaries of two datasets (old vs new)
+    - Comparison deltas between old and new results
+    - These are the rules for calculating EAD under collateral haircut approach: https://www.ecfr.gov/current/title-12/chapter-II/subchapter-A/part-217/subpart-D/subject-group-ECFR90182ef648cc7a4/section-217.37
+
+    Always ground your reasoning in what you find through the tools.
 
     EAD Calculation Code:
     {code_text}
-
-    Here are two datasets in full:
-    OLD dataset:
-    {input_data_old_text}
-
-    NEW dataset:
-    {input_data_new_text}
 
     Input Data Summary (key drivers):
     {driver_summary}
@@ -103,13 +114,14 @@ def ai_agent(code_text,input_data_old,input_data_new,driver_summary,ead_deltas,l
 
     model = init_chat_model(
         llm_model,
-        temperature=0.1,
-        max_tokens=1500
+        temperature=0,
+        max_tokens=1000
     )
 
     agent = create_agent(
         model=model,
         system_prompt=SYSTEM_PROMPT,
+        tools=tools,
         context_schema=Context,
         response_format=ResponseFormat,
         checkpointer=checkpointer
@@ -157,17 +169,19 @@ if file_old and file_new:
         df_old = pd.read_csv(file_old)
         df_new = pd.read_csv(file_new)
 
-        merged = compare_ead(df_old, df_new)
-        driver_summary = summarize_inputs(df_old, df_new)
+        merged = compare_ead_cached(df_old, df_new)
+        driver_summary = summarize_inputs_cached(df_old, df_new)
         code_text = inspect.getsource(rwa_calc.CalcEAD)
         ead_deltas = merged.to_string()
 
+        tools = build_tools(df_old, df_new)
+
         if st.session_state.agent is None:
-            st.session_state.agent = ai_agent(code_text, df_old, df_new, driver_summary, ead_deltas, llm_model)
+            st.session_state.agent = ai_agent(code_text, driver_summary, ead_deltas, llm_model, tools)
 
         st.subheader("📈 EAD Summary Comparison")
         st.dataframe(
-            merged.reset_index(drop=True).style.format("{:,.0f}"), 
+            merged.reset_index(drop=True), 
             use_container_width=True, 
             hide_index=True
         )
