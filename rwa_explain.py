@@ -5,6 +5,8 @@ import inspect
 import streamlit as st
 from dotenv import load_dotenv, find_dotenv
 from dataclasses import dataclass
+import contextlib
+import io
 
 import rwa_calc
 from rwa_calc import CalcEAD
@@ -16,7 +18,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 load_dotenv(find_dotenv())
 
-llm_model = "openai:gpt-4o" # "anthropic:claude-sonnet-4-5"
+llm_model = "anthropic:claude-sonnet-4-5" # "openai:gpt-4o"
 
 # Define context schema
 @dataclass
@@ -61,6 +63,41 @@ def summarize_inputs_cached(df_old, df_new):
         drivers.append(desc)
     return pd.concat(drivers)
 
+@st.cache_data
+def summarize_input_diff(df_old, df_new, id_cols, exclude_cols=None):
+    
+    df1 = pd.read_csv(df_old) if isinstance(df_old, str) else df_old.copy()
+    df2 = pd.read_csv(df_new) if isinstance(df_new, str) else df_new.copy()
+    
+    exclude_cols = (exclude_cols or []) + id_cols
+ 
+    df1 = df1.sort_values(id_cols).reset_index(drop=True)
+    df2 = df2.sort_values(id_cols).reset_index(drop=True)
+
+
+    diff_mask = (df1 != df2) & ~(df1.isna() & df2.isna())
+
+
+    diff_list = []
+    for col in df1.columns:
+        if col in exclude_cols:
+            continue
+        changed_rows = diff_mask[col]
+        if changed_rows.any():
+            temp = pd.concat([df1.loc[changed_rows, id_cols],
+                              pd.DataFrame({
+                                  'column': col,
+                                  'old_value': df1.loc[changed_rows, col],
+                                  'new_value': df2.loc[changed_rows, col]
+                              })],
+                             axis=1)
+            diff_list.append(temp)
+
+    if not diff_list:
+        return pd.DataFrame(columns=id_cols + ['column', 'old_value', 'new_value'])
+
+    return pd.concat(diff_list, ignore_index=True)
+
 def build_tools(df_old, df_new):    
     @tool
     def preview_data(dataset: str, n: int = 5) -> str:
@@ -80,14 +117,10 @@ def build_tools(df_old, df_new):
 
     return [preview_data, query_data]
 
-def ai_agent(code_text,driver_summary,ead_deltas,llm_model,tools):
+def ai_agent(code_text, input_diff, driver_summary, ead_deltas, llm_model):
 
     SYSTEM_PROMPT = f"""
     You are an expert financial risk analyst.
-
-    You can use the following Python tools to explore real datasets:
-    - preview_data: to inspect sample rows
-    - query_data: to filter data by condition
 
     You are given:
     - Python code for EAD calculation
@@ -95,10 +128,11 @@ def ai_agent(code_text,driver_summary,ead_deltas,llm_model,tools):
     - Comparison deltas between old and new results
     - These are the rules for calculating EAD under collateral haircut approach: https://www.ecfr.gov/current/title-12/chapter-II/subchapter-A/part-217/subpart-D/subject-group-ECFR90182ef648cc7a4/section-217.37
 
-    Always ground your reasoning in what you find through the tools.
-
     EAD Calculation Code:
     {code_text}
+
+    Input Difference Summary:
+    {input_diff}
 
     Input Data Summary (key drivers):
     {driver_summary}
@@ -108,7 +142,7 @@ def ai_agent(code_text,driver_summary,ead_deltas,llm_model,tools):
 
     Now, write a clear narrative explaining:
     - What changed between old and new datasets
-    - Which components drove the EAD differences
+    - Which components drove the EAD differences. Hint: Look for the key drivers in the Netting Set level Data Summary. Then check the input difference summary file to see what changed in the input file and combine the change with EAD Calculation Code logic to see how the change in input file result in different EAD value.
     - Any specific patterns or anomalies you can infer
     """
 
@@ -121,7 +155,7 @@ def ai_agent(code_text,driver_summary,ead_deltas,llm_model,tools):
     agent = create_agent(
         model=model,
         system_prompt=SYSTEM_PROMPT,
-        tools=tools,
+        # tools=tools,
         context_schema=Context,
         response_format=ResponseFormat,
         checkpointer=checkpointer
@@ -171,20 +205,23 @@ if file_old and file_new:
 
         merged = compare_ead_cached(df_old, df_new)
         driver_summary = summarize_inputs_cached(df_old, df_new)
+        id_columns = ['Netting Set ID', 'Source Txns ID', 'Security ID']
+        exclude_columns = ['Date']
+        input_difference = summarize_input_diff(df_old, df_new, id_columns, exclude_columns)
         code_text = inspect.getsource(rwa_calc.CalcEAD)
         ead_deltas = merged.to_string()
 
         tools = build_tools(df_old, df_new)
 
         if st.session_state.agent is None:
-            st.session_state.agent = ai_agent(code_text, driver_summary, ead_deltas, llm_model, tools)
+            st.session_state.agent = ai_agent(code_text, input_difference, driver_summary, ead_deltas, llm_model)
 
-        st.subheader("📈 EAD Summary Comparison")
-        st.dataframe(
-            merged.reset_index(drop=True), 
-            use_container_width=True, 
-            hide_index=True
-        )
+        # st.subheader("📈 EAD Summary Comparison")
+        # st.dataframe(
+        #     merged.reset_index(drop=True), 
+        #     use_container_width=True, 
+        #     hide_index=True
+        # )
 
         st.markdown("### 💬 Conversation Controls")
         if st.button("🔄 Start New Conversation"):
@@ -199,24 +236,26 @@ if file_old and file_new:
         # Display prior messages
         for msg in st.session_state.chat_history:
             with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
+                render_response(msg["content"])
 
         if user_q := st.chat_input("Enter a question..."):
             with st.chat_message("user"):
                 st.markdown(user_q)
             st.session_state.chat_history.append({"role": "user", "content": user_q})
 
-            # Get AI response
             with st.chat_message("assistant"):
                 with st.spinner("Analyzing and generating explanation..."):
-                    response = st.session_state.agent.invoke(
-                        {"messages": [{"role": "user", "content": user_q}]},
-                        config={"configurable": {"thread_id": st.session_state.thread_id}},
-                        context=Context(user_id="1")
-                    )
+                    buf = io.StringIO()
+                    with contextlib.redirect_stdout(buf): 
+                        response = st.session_state.agent.invoke(
+                            {"messages": [{"role": "user", "content": user_q}]},
+                            config={"configurable": {"thread_id": st.session_state.thread_id}},
+                            context=Context(user_id="1")
+                        )
 
-                    explanation = response["structured_response"].response
-                    render_response(explanation)
-                    st.session_state.chat_history.append({"role": "assistant", "content": explanation})
+                explanation = response["structured_response"].response
+                render_response(explanation)
+                st.session_state.chat_history.append({"role": "assistant", "content": explanation})
+                
 else:
     st.info("👆 Please upload both old and new CSV files to begin.")

@@ -162,7 +162,6 @@ class CalcEAD():
 
 # %%
 if __name__ == "__main__":
-    print("Running EAD test...")
     df_old = pd.read_csv('Data v2_1.csv')
     df_new = pd.read_csv('Data v2_2.csv')
     calc_old = CalcEAD(df_old)
