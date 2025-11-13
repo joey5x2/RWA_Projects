@@ -155,10 +155,29 @@ class CalcEAD():
             right_index=True
         )
 
+        df_rwa_summary = df_rwa_summary.fillna(0)
+
         df_rwa_summary['EAD - Scen A'] = df_rwa_summary.apply(lambda row: max(0,row['Trade Level Exposure']-row['Trade Level Collateral - Scen A']+row['Sec Addon Net Amount - Scen A']+row['FX Addon Net Amount - Scen A']),axis=1)
         df_rwa_summary['EAD - Scen B'] = df_rwa_summary.apply(lambda row: max(0,row['Trade Level Exposure']-row['Trade Level Collateral - Scen B']+row['Sec Addon Net Amount - Scen B']+row['FX Addon Net Amount - Scen B']),axis=1)
-        df_rwa_summary['EAD'] = df_rwa_summary.apply(lambda row: min(row['EAD - Scen A'],row['EAD - Scen B']),axis=1)
-        return df_rwa_summary
+        # df_rwa_summary['EAD'] = df_rwa_summary.apply(lambda row: min(row['EAD - Scen A'],row['EAD - Scen B']),axis=1)
+        df_rwa_summary['Chosen Scenario'] = np.where(df_rwa_summary['EAD - Scen A'] <= df_rwa_summary['EAD - Scen B'],'A','B')
+
+        result = []
+        for _, row in df_rwa_summary.iterrows():
+            scen = row['Chosen Scenario']
+            data = {
+                'Netting Set ID': _,
+                # 'Chosen Scenario': scen,
+                'Exposure': row['Trade Level Exposure'],
+                'Collateral': row[f'Trade Level Collateral - Scen {scen}'],
+                'Sec Addon': row[f'Sec Addon Net Amount - Scen {scen}'],
+                'FX Addon': row[f'FX Addon Net Amount - Scen {scen}'],
+                'EAD': row[f'EAD - Scen {scen}']
+            }
+            result.append(data)
+
+        df_final = pd.DataFrame(result)
+        return df_final[['Netting Set ID','Exposure','Collateral','Sec Addon','FX Addon','EAD']]
 
 # %%
 if __name__ == "__main__":
@@ -166,4 +185,3 @@ if __name__ == "__main__":
     df_new = pd.read_csv('Data v2_2.csv')
     calc_old = CalcEAD(df_old)
     calc_new = CalcEAD(df_new)
-    print(calc_new.df_rwa_summary)

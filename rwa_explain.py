@@ -1,4 +1,3 @@
-# %%
 import os
 import pandas as pd
 import inspect
@@ -7,6 +6,8 @@ from dotenv import load_dotenv, find_dotenv
 from dataclasses import dataclass
 import contextlib
 import io
+import random
+import numpy as np
 
 import rwa_calc
 from rwa_calc import CalcEAD
@@ -19,6 +20,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 load_dotenv(find_dotenv())
 
 llm_model = "anthropic:claude-sonnet-4-5" # "openai:gpt-4o"
+SEED = 32
+os.environ["PYTHONHASHSEED"] = str(SEED)
+random.seed(SEED)
+np.random.seed(SEED)
 
 # Define context schema
 @dataclass
@@ -33,7 +38,6 @@ class ResponseFormat:
 # Set up memory
 checkpointer = InMemorySaver()
 
-# %%
 @st.cache_data
 def compare_ead_cached(df_old, df_new):
     data_old, data_new = CalcEAD(df_old), CalcEAD(df_new)
@@ -42,14 +46,7 @@ def compare_ead_cached(df_old, df_new):
 
     merged = summary_old.merge(summary_new, on="Netting Set ID", suffixes=("_old", "_new"), how="outer")
 
-    for col in [
-        "Trade Level Exposure",
-        "Trade Level Collateral - Scen A",
-        "Trade Level Collateral - Scen B",
-        "EAD - Scen A",
-        "EAD - Scen B",
-        "EAD"
-    ]:
+    for col in ["Exposure","Collateral","Sec Addon","FX Addon","EAD"]:
         merged[f"{col}_Δ"] = merged.get(f"{col}_new", 0) - merged.get(f"{col}_old", 0)
     return merged
 
@@ -74,9 +71,7 @@ def summarize_input_diff(df_old, df_new, id_cols, exclude_cols=None):
     df1 = df1.sort_values(id_cols).reset_index(drop=True)
     df2 = df2.sort_values(id_cols).reset_index(drop=True)
 
-
     diff_mask = (df1 != df2) & ~(df1.isna() & df2.isna())
-
 
     diff_list = []
     for col in df1.columns:
@@ -122,6 +117,10 @@ def ai_agent(code_text, input_diff, driver_summary, ead_deltas, llm_model):
     SYSTEM_PROMPT = f"""
     You are an expert financial risk analyst.
 
+    Assume the following:
+    - There are no data quality issues.
+    - LRM flag stands for whether a security is considered as liquid and readily marketable.
+
     You are given:
     - Python code for EAD calculation
     - Summaries of two datasets (old vs new)
@@ -137,11 +136,11 @@ def ai_agent(code_text, input_diff, driver_summary, ead_deltas, llm_model):
     Input Data Summary (key drivers):
     {driver_summary}
 
-    EAD Comparison Summary (with deltas):
+    EAD comparison (with deltas):
     {ead_deltas}
 
     Now, write a clear narrative explaining:
-    - What changed between old and new datasets
+    - What changed between old and new datasets, without mentioning of scenario changes
     - Which components drove the EAD differences. Hint: Look for the key drivers in the Netting Set level Data Summary. Then check the input difference summary file to see what changed in the input file and combine the change with EAD Calculation Code logic to see how the change in input file result in different EAD value.
     - Any specific patterns or anomalies you can infer
     """
@@ -181,7 +180,7 @@ def render_response(text: str):
     else:
         st.markdown(text)
 
-st.set_page_config(page_title="EAD Delta Analyzer", layout="wide")
+st.set_page_config(page_title="EAD Variance Analyzer", layout="wide")
 st.title("📊 EAD Variance Analyzer with LangChain")
 st.write("Upload two datasets (old vs new) to analyze EAD changes and get an AI explanation.")
 
@@ -216,12 +215,12 @@ if file_old and file_new:
         if st.session_state.agent is None:
             st.session_state.agent = ai_agent(code_text, input_difference, driver_summary, ead_deltas, llm_model)
 
-        # st.subheader("📈 EAD Summary Comparison")
-        # st.dataframe(
-        #     merged.reset_index(drop=True), 
-        #     use_container_width=True, 
-        #     hide_index=True
-        # )
+        st.subheader("📈 EAD Summary")
+        st.dataframe(
+            merged.reset_index(drop=True), 
+            use_container_width=True, 
+            hide_index=True
+        )
 
         st.markdown("### 💬 Conversation Controls")
         if st.button("🔄 Start New Conversation"):
@@ -256,6 +255,8 @@ if file_old and file_new:
                 explanation = response["structured_response"].response
                 render_response(explanation)
                 st.session_state.chat_history.append({"role": "assistant", "content": explanation})
-                
+            placeholder = st.empty()
+            placeholder.markdown("")
+
 else:
     st.info("👆 Please upload both old and new CSV files to begin.")
