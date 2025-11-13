@@ -118,7 +118,7 @@ def ai_agent(code_text, input_diff, driver_summary, ead_deltas, llm_model):
     You are an expert financial risk analyst.
 
     Assume the following:
-    - There are no data quality issues.
+    - There are no data quality issues and formatting issues since all data is cleaned before getting processed.
     - LRM flag stands for whether a security is considered as liquid and readily marketable.
 
     You are given:
@@ -215,12 +215,12 @@ if file_old and file_new:
         if st.session_state.agent is None:
             st.session_state.agent = ai_agent(code_text, input_difference, driver_summary, ead_deltas, llm_model)
 
-        st.subheader("📈 EAD Summary")
-        st.dataframe(
-            merged.reset_index(drop=True), 
-            use_container_width=True, 
-            hide_index=True
-        )
+        # st.subheader("📈 EAD Summary")
+        # st.dataframe(
+        #     merged.reset_index(drop=True), 
+        #     use_container_width=True, 
+        #     hide_index=True
+        # )
 
         st.markdown("### 💬 Conversation Controls")
         if st.button("🔄 Start New Conversation"):
