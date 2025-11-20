@@ -1,13 +1,10 @@
+# %%
 import os
 import pandas as pd
 import inspect
 import streamlit as st
 from dotenv import load_dotenv, find_dotenv
 from dataclasses import dataclass
-import contextlib
-import io
-import random
-import numpy as np
 
 import rwa_calc
 from rwa_calc import CalcEAD
@@ -19,11 +16,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 load_dotenv(find_dotenv())
 
-llm_model = "anthropic:claude-sonnet-4-5" # "openai:gpt-4o"
-SEED = 32
-os.environ["PYTHONHASHSEED"] = str(SEED)
-random.seed(SEED)
-np.random.seed(SEED)
+llm_model = "anthropic:claude-sonnet-4-5" #"openai:gpt-4o" 
 
 # Define context schema
 @dataclass
@@ -38,15 +31,25 @@ class ResponseFormat:
 # Set up memory
 checkpointer = InMemorySaver()
 
+# %%
 @st.cache_data
 def compare_ead_cached(df_old, df_new):
     data_old, data_new = CalcEAD(df_old), CalcEAD(df_new)
     summary_old = data_old.df_rwa_summary.reset_index()
     summary_new = data_new.df_rwa_summary.reset_index()
 
+
+
     merged = summary_old.merge(summary_new, on="Netting Set ID", suffixes=("_old", "_new"), how="outer")
 
-    for col in ["Exposure","Collateral","Sec Addon","FX Addon","EAD"]:
+    for col in [
+        "Trade Level Exposure",
+        "Trade Level Collateral - Scen A",
+        "Trade Level Collateral - Scen B",
+        "EAD - Scen A",
+        "EAD - Scen B",
+        "EAD"
+    ]:
         merged[f"{col}_Δ"] = merged.get(f"{col}_new", 0) - merged.get(f"{col}_old", 0)
     return merged
 
@@ -71,7 +74,9 @@ def summarize_input_diff(df_old, df_new, id_cols, exclude_cols=None):
     df1 = df1.sort_values(id_cols).reset_index(drop=True)
     df2 = df2.sort_values(id_cols).reset_index(drop=True)
 
+
     diff_mask = (df1 != df2) & ~(df1.isna() & df2.isna())
+
 
     diff_list = []
     for col in df1.columns:
@@ -95,43 +100,6 @@ def summarize_input_diff(df_old, df_new, id_cols, exclude_cols=None):
 
 
 
-def summarize_missing_data(df_old, df_new):
-    #Currently only handling missing currency codes
-    columns = ["Netting Set ID", "Source Txns ID", "Date","Market Value", "ISO CCY", "Principal", "Prin CCY", "Agr Settlement Ccy code"]
-    df = pd.concat([df_old[columns], df_new[columns]], ignore_index=True)
-
-    flag_iso_null = (df["Market Value"].notna()) & (df["Market Value"] != 0) & df["ISO CCY"].isna()
-
-    flag_prin_null = (df["Principal"].notna()) & (df["Principal"] != 0) & df["Prin CCY"].isna()
-
-    flag_settle_null = df["Agr Settlement Ccy code"].isna()
-
-    # Build the Reason column
-    reasons = []
-    for iso_flag, prin_flag, settle_flag in zip(flag_iso_null, flag_prin_null, flag_settle_null):
-        tags = []
-        if iso_flag:
-            tags.append("ISO CCY null when Market Value not null/non-zero; Defaulted to USD")
-        if prin_flag:
-            tags.append("Prin CCY null when Principal not null/non-zero; Defaulted to USD")
-        if settle_flag:
-            tags.append("Agr Settlement Ccy code null; Defaulted to USD")
-        reasons.append(";".join(tags))
-
-    df["Reason"] = reasons
-
-    # Final mask
-    mask = flag_iso_null | flag_prin_null | flag_settle_null
-
-    # Output dataframe
-    df_issues = df.loc[
-        mask,
-        ["Netting Set ID", "Source Txns ID", "Date", "Reason"]
-    ]
-
-    return df_issues
-
-
 
 def build_tools(df_old, df_new):    
     @tool
@@ -152,14 +120,14 @@ def build_tools(df_old, df_new):
 
     return [preview_data, query_data]
 
-def ai_agent(code_text, input_diff, driver_summary, ead_deltas, llm_model):
+def ai_agent(code_text,input_difference, driver_summary,ead_deltas,llm_model,tools):
 
     SYSTEM_PROMPT = f"""
     You are an expert financial risk analyst.
 
-    Assume the following:
-    - There are no data quality issues and formatting issues since all data is cleaned before getting processed.
-    - LRM flag stands for whether a security is considered as liquid and readily marketable.
+    You can use the following Python tools to explore real datasets:
+    - preview_data: to inspect sample rows
+    - query_data: to filter data by condition
 
     You are given:
     - Python code for EAD calculation
@@ -167,24 +135,22 @@ def ai_agent(code_text, input_diff, driver_summary, ead_deltas, llm_model):
     - Comparison deltas between old and new results
     - These are the rules for calculating EAD under collateral haircut approach: https://www.ecfr.gov/current/title-12/chapter-II/subchapter-A/part-217/subpart-D/subject-group-ECFR90182ef648cc7a4/section-217.37
 
+    Always ground your reasoning in what you find through the tools.
+
     EAD Calculation Code:
     {code_text}
 
     Input Difference Summary:
-    {input_diff}
+    {input_difference}
 
-    Missing Input Data:
-    {missing_input}
-
-    Input Data Summary (key drivers):
+    Netting Set level Data Summary (key drivers):
     {driver_summary}
 
-    EAD comparison (with deltas):
+    EAD Comparison Summary (with deltas):
     {ead_deltas}
 
     Now, write a clear narrative explaining:
-    - What changed between old and new datasets, without mentioning of scenario changes
-    - What are the missing input data
+    - What changed between old and new datasets
     - Which components drove the EAD differences. Hint: Look for the key drivers in the Netting Set level Data Summary. Then check the input difference summary file to see what changed in the input file and combine the change with EAD Calculation Code logic to see how the change in input file result in different EAD value.
     - Any specific patterns or anomalies you can infer
     """
@@ -198,7 +164,7 @@ def ai_agent(code_text, input_diff, driver_summary, ead_deltas, llm_model):
     agent = create_agent(
         model=model,
         system_prompt=SYSTEM_PROMPT,
-        # tools=tools,
+        tools=tools,
         context_schema=Context,
         response_format=ResponseFormat,
         checkpointer=checkpointer
@@ -224,7 +190,7 @@ def render_response(text: str):
     else:
         st.markdown(text)
 
-st.set_page_config(page_title="EAD Variance Analyzer", layout="wide")
+st.set_page_config(page_title="EAD Delta Analyzer", layout="wide")
 st.title("📊 EAD Variance Analyzer with LangChain")
 st.write("Upload two datasets (old vs new) to analyze EAD changes and get an AI explanation.")
 
@@ -251,21 +217,20 @@ if file_old and file_new:
         id_columns = ['Netting Set ID', 'Source Txns ID', 'Security ID']
         exclude_columns = ['Date']
         input_difference = summarize_input_diff(df_old, df_new, id_columns, exclude_columns)
-        missing_input = summarize_missing_data(df_old, df_new)
         code_text = inspect.getsource(rwa_calc.CalcEAD)
         ead_deltas = merged.to_string()
 
         tools = build_tools(df_old, df_new)
 
         if st.session_state.agent is None:
-            st.session_state.agent = ai_agent(code_text, input_difference, driver_summary, ead_deltas, llm_model)
+            st.session_state.agent = ai_agent(code_text, input_difference, driver_summary, ead_deltas, llm_model, tools)
 
-        # st.subheader("📈 EAD Summary")
-        # st.dataframe(
-        #     merged.reset_index(drop=True), 
-        #     use_container_width=True, 
-        #     hide_index=True
-        # )
+        st.subheader("📈 EAD Summary Comparison")
+        st.dataframe(
+            merged.reset_index(drop=True), 
+            use_container_width=True, 
+            hide_index=True
+        )
 
         st.markdown("### 💬 Conversation Controls")
         if st.button("🔄 Start New Conversation"):
@@ -280,28 +245,24 @@ if file_old and file_new:
         # Display prior messages
         for msg in st.session_state.chat_history:
             with st.chat_message(msg["role"]):
-                render_response(msg["content"])
+                st.markdown(msg["content"])
 
         if user_q := st.chat_input("Enter a question..."):
             with st.chat_message("user"):
                 st.markdown(user_q)
             st.session_state.chat_history.append({"role": "user", "content": user_q})
 
+            # Get AI response
             with st.chat_message("assistant"):
                 with st.spinner("Analyzing and generating explanation..."):
-                    buf = io.StringIO()
-                    with contextlib.redirect_stdout(buf): 
-                        response = st.session_state.agent.invoke(
-                            {"messages": [{"role": "user", "content": user_q}]},
-                            config={"configurable": {"thread_id": st.session_state.thread_id}},
-                            context=Context(user_id="1")
-                        )
+                    response = st.session_state.agent.invoke(
+                        {"messages": [{"role": "user", "content": user_q}]},
+                        config={"configurable": {"thread_id": st.session_state.thread_id}},
+                        context=Context(user_id="1")
+                    )
 
-                explanation = response["structured_response"].response
-                render_response(explanation)
-                st.session_state.chat_history.append({"role": "assistant", "content": explanation})
-            placeholder = st.empty()
-            placeholder.markdown("")
-
+                    explanation = response["structured_response"].response
+                    render_response(explanation)
+                    st.session_state.chat_history.append({"role": "assistant", "content": explanation})
 else:
     st.info("👆 Please upload both old and new CSV files to begin.")

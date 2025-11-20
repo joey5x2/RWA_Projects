@@ -51,6 +51,7 @@ class CalcEAD():
         else:
             trade_exposure = 'DQ'
             trade_collateral = 'DQ'
+        
 
         if row['Buy or Sell Indicator'] == 'S':
             eligible_collateral  = trade_collateral
@@ -102,6 +103,11 @@ class CalcEAD():
 
     def _compute_fx_addon(self):
         df = self.df
+
+        # if currency missing, default to USD
+        df['Exposure Currency'] = df['Exposure Currency'].fillna('USD')
+        df['Collateral Currency'] = df['Collateral Currency'].fillna('USD')
+        df['Agr Settlement Ccy code'] = df['Agr Settlement Ccy code'].fillna('USD')
 
         df_fx_addon = pd.merge(
             df.pivot_table(index=['Netting Set ID','Exposure Currency'],values=['Trade Level Exposure'],aggfunc='sum').reset_index(),
