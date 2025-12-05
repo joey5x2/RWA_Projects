@@ -13,7 +13,7 @@ class CalcEAD():
         self.df.columns = df.columns.str.strip()
         self.df.replace(["N/A", "NA", "-", "—", "", " "], np.nan, inplace=True)
 
-        numeric_cols = ['Principal', 'Market Value', 'Haircut','Scen A MPOR', 'Scen B MPOR']
+        numeric_cols = ['Principal', 'Market Value', 'Haircut','Scen A MPOR', 'Scen B MPOR','SA EAD']
         for col in numeric_cols:
             self.df[col] = (
                         self.df[col]
@@ -48,6 +48,8 @@ class CalcEAD():
         self.df_sec_addon = self._compute_sec_addon()
         self.df_fx_addon = self._compute_fx_addon()
         self.df_rwa_summary = self._compute_rwa_summary()
+
+
 
     def calc_txn_components(self,row):
         
@@ -147,6 +149,7 @@ class CalcEAD():
         df_fx_addon['FX Addon Net Amount - Scen B'] = abs(df_fx_addon['Trade Level Exposure']-df_fx_addon['Trade Level Collateral - Scen B'])*0.08*np.sqrt(df_fx_addon['Scen B MPOR - Recalc']/10)
 
         return df_fx_addon
+    
 
     def _compute_rwa_summary(self):
         df = self.df
@@ -155,8 +158,8 @@ class CalcEAD():
         
         df_rwa_summary = df.pivot_table(
             index=['Netting Set ID'],
-            values=['Trade Level Exposure','Trade Level Collateral - Scen A','Trade Level Collateral - Scen B'],
-            aggfunc='sum'
+            values=['Trade Level Exposure','Trade Level Collateral - Scen A','Trade Level Collateral - Scen B','SA EAD'],
+            aggfunc={'Trade Level Exposure': 'sum','Trade Level Collateral - Scen A': 'sum','Trade Level Collateral - Scen B': 'sum','SA EAD': 'mean'}
         )
 
         df_rwa_summary = pd.merge(
@@ -190,12 +193,13 @@ class CalcEAD():
                 'Collateral': row[f'Trade Level Collateral - Scen {scen}'],
                 'Sec Addon': row[f'Sec Addon Net Amount - Scen {scen}'],
                 'FX Addon': row[f'FX Addon Net Amount - Scen {scen}'],
-                'EAD': row[f'EAD - Scen {scen}']
+                'EAD': row[f'EAD - Scen {scen}'],
+                'SA EAD': row['SA EAD']
             }
             result.append(data)
 
         df_final = pd.DataFrame(result)
-        return df_final[['Netting Set ID','Exposure','Collateral','Sec Addon','FX Addon','EAD']]
+        return df_final[['Netting Set ID','Exposure','Collateral','Sec Addon','FX Addon','EAD', 'SA EAD']]
 
 # %%
 if __name__ == "__main__":

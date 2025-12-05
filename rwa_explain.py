@@ -55,6 +55,8 @@ def summarize_inputs_cached(df_old, df_new):
     drivers = []
     for label, df in [("old", df_old), ("new", df_new)]:
         numeric_cols = df.select_dtypes("number").columns.tolist()
+        if "SA EAD" in numeric_cols:
+            numeric_cols += ["SA EAD"]
         desc = df[numeric_cols].describe().T.round(2)
         desc["dataset"] = label
         drivers.append(desc)
@@ -187,6 +189,7 @@ def ai_agent(code_text, input_diff, driver_summary, ead_deltas, llm_model):
     - What are the missing input data
     - Which components drove the EAD differences. Hint: Look for the key drivers in the Netting Set level Data Summary. Then check the input difference summary file to see what changed in the input file and combine the change with EAD Calculation Code logic to see how the change in input file result in different EAD value.
     - Any specific patterns or anomalies you can infer
+    - When asked to verify the EAD, compare the EAD column and the SA EAD column to see if the difference is greater than 0.01% of the EAD value. If so, flag it as a potential issue.
     """
 
     model = init_chat_model(
