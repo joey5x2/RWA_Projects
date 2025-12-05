@@ -152,6 +152,7 @@ def ai_agent(tools,llm_model):
     - Concise but complete
     - Explain *why* EAD changed using tool data if being asked
     - Never claim "I don't have access to data" — use the tools
+    - When asked to verify the EAD, compare the EAD column and the SA EAD column to see if the difference is greater than 0.01% of the EAD value. If so, flag it as a potential issue.
 
     When necessary, call a tool to retrieve precise data.
     """
