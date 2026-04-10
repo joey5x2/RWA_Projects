@@ -1,3 +1,7 @@
+"""
+Second demo version with missing value func
+"""
+
 import os
 import pandas as pd
 import inspect
@@ -9,13 +13,13 @@ import io
 import random
 import numpy as np
 
-import rwa_calc_b3endgame
-from rwa_calc_b3endgame import CalcEAD
+import rwa_calc_b3p
+from rwa_calc_b3p import CalcEAD
 
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 from langchain.tools import tool
-from langgraph.checkpoint.memory import InMemorySaver
+# from langgraph.checkpoint.memory import InMemorySaver
 
 load_dotenv(find_dotenv())
 
@@ -36,7 +40,7 @@ class ResponseFormat:
     response: str
 
 # Set up memory
-checkpointer = InMemorySaver()
+# checkpointer = InMemorySaver()
 
 @st.cache_data
 def compare_ead_cached(df_old, df_new):
@@ -55,8 +59,6 @@ def summarize_inputs_cached(df_old, df_new):
     drivers = []
     for label, df in [("old", df_old), ("new", df_new)]:
         numeric_cols = df.select_dtypes("number").columns.tolist()
-        if "SA EAD" in numeric_cols:
-            numeric_cols += ["SA EAD"]
         desc = df[numeric_cols].describe().T.round(2)
         desc["dataset"] = label
         drivers.append(desc)
@@ -95,8 +97,6 @@ def summarize_input_diff(df_old, df_new, id_cols, exclude_cols=None):
 
     return pd.concat(diff_list, ignore_index=True)
 
-
-
 def summarize_missing_data(df_old, df_new):
     #Currently only handling missing currency codes
     columns = ["Netting Set ID", "Source Txns ID", "Date","Market Value", "ISO CCY", "Principal", "Prin CCY", "Agr Settlement Ccy code"]
@@ -132,8 +132,6 @@ def summarize_missing_data(df_old, df_new):
     ]
 
     return df_issues
-
-
 
 def build_tools(df_old, df_new):    
     @tool
@@ -187,7 +185,7 @@ def ai_agent(code_text, input_diff, driver_summary, ead_deltas, llm_model):
     Now, write a clear narrative explaining:
     - What changed between old and new datasets, without mentioning of scenario changes
     - What are the missing input data
-    - Which components drove the EAD differences. Hint: Look for the key drivers in the Netting Set level Data Summary. Then check the input difference summary file to see what changed in the input file and combine the change with EAD Calculation Code logic to see how the change in input file result in different EAD value.
+    - Which components drove the EAD differences. Hint: Look for the key drivers in the Netting Set level Data Summary. Then check the input difference summary file to see what changed in the input file and combine the change with EAD Calculation Code logic (but do not show code text in the output) to see how the change in input file result in different EAD value.
     - Any specific patterns or anomalies you can infer
     - When asked to verify the EAD, compare the EAD column and the SA EAD column to see if the difference is greater than 0.01% of the EAD value. If so, flag it as a potential issue.
     """
@@ -204,7 +202,7 @@ def ai_agent(code_text, input_diff, driver_summary, ead_deltas, llm_model):
         # tools=tools,
         context_schema=Context,
         response_format=ResponseFormat,
-        checkpointer=checkpointer
+        checkpointer=None
     )
 
     return agent
@@ -255,7 +253,7 @@ if file_old and file_new:
         exclude_columns = ['Date']
         input_difference = summarize_input_diff(df_old, df_new, id_columns, exclude_columns)
         missing_input = summarize_missing_data(df_old, df_new)
-        code_text = inspect.getsource(rwa_calc_b3endgame.CalcEAD)
+        code_text = inspect.getsource(rwa_calc_b3p.CalcEAD)
         ead_deltas = merged.to_string()
 
         tools = build_tools(df_old, df_new)
